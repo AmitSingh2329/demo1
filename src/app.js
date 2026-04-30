@@ -21,7 +21,7 @@ app.use(cookieParser());
 // 🔥 CORS (more flexible)
 app.use(
   cors({
-    origin: ["http://localhost:5173", "http://localhost:5174"], // allow both
+    origin: ["http://localhost:5173", "http://localhost:5174","https://demo1-adh4.onrender.com"], // allow both
     credentials: true,
   })
 );
