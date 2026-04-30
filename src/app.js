@@ -36,5 +36,8 @@ app.use("/api/disease", diseaseRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/alerts", alertRoutes);
 
+app.get("/", (req, res) => {
+  res.send("API is running 🚀");
+});
 
 export default app;
