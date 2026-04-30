@@ -1,9 +1,8 @@
-
 import axios from "axios";
 import FormData from "form-data";
-import fs from "fs";
 import User from "../models/User.js";
-import { v2 as cloudinary } from "cloudinary";
+import cloudinary from "../config/cloudinary.js";
+import streamifier from "streamifier";
 
 export const detectDisease = async (req, res) => {
   let result = { disease: "Unknown Disease" };
@@ -14,28 +13,27 @@ export const detectDisease = async (req, res) => {
     return res.status(400).json({ error: "Image is required" });
   }
 
-  console.log("FILE PATH:", req.file.path);
+  console.log("📦 File received:", req.file.originalname);
 
-  // 🔥 STEP 1: Configure Cloudinary (RUNTIME SAFE)
-  cloudinary.config({
-    cloud_name: process.env.CLOUD_NAME?.trim(),
-    api_key: process.env.CLOUD_API_KEY?.trim(),
-    api_secret: process.env.CLOUD_API_SECRET?.trim(),
-  });
-
-  console.log("ENV CHECK:");
-  console.log(process.env.CLOUD_NAME);
-  console.log(process.env.CLOUD_API_KEY);
-  console.log(process.env.CLOUD_API_SECRET);
-
-  // 🔥 STEP 2: Upload Image (ALWAYS TRY)
-  try {
-    console.log("Uploading to Cloudinary...");
-
-    const uploaded = await cloudinary.uploader.upload(req.file.path, {
-      folder: "disease_detection",
+  // 🔥 Upload buffer to Cloudinary
+  const uploadFromBuffer = (buffer) => {
+    return new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: "disease_detection" },
+        (error, result) => {
+          if (result) resolve(result);
+          else reject(error);
+        }
+      );
+      streamifier.createReadStream(buffer).pipe(stream);
     });
+  };
 
+  // 🔥 STEP 1: Upload to Cloudinary
+  try {
+    console.log("☁️ Uploading to Cloudinary...");
+
+    const uploaded = await uploadFromBuffer(req.file.buffer);
     imageUrl = uploaded.secure_url;
 
     console.log("✅ Cloudinary URL:", imageUrl);
@@ -44,11 +42,15 @@ export const detectDisease = async (req, res) => {
     console.error("❌ Cloudinary Error:", uploadError.message);
   }
 
-  // 🔥 STEP 3: Try ML (OPTIONAL / FALLBACK SAFE)
+  // 🔥 STEP 2: ML API (optional)
   try {
     if (process.env.ML_DISEASE_API) {
       const formData = new FormData();
-      formData.append("file", fs.createReadStream(req.file.path));
+
+      formData.append("file", req.file.buffer, {
+        filename: req.file.originalname,
+        contentType: req.file.mimetype,
+      });
 
       const mlResponse = await axios.post(
         process.env.ML_DISEASE_API,
@@ -76,13 +78,13 @@ export const detectDisease = async (req, res) => {
     };
   }
 
-  // 🔥 STEP 4: Save to DB (ALWAYS)
+  // 🔥 STEP 3: Save to DB
   try {
     if (req.user?._id) {
       await User.findByIdAndUpdate(req.user._id, {
         $push: {
           diseaseHistory: {
-            image: imageUrl, // may be empty if upload fails
+            image: imageUrl,
             result,
             createdAt: new Date(),
           },
@@ -95,18 +97,10 @@ export const detectDisease = async (req, res) => {
     console.error("❌ DB Error:", dbError.message);
   }
 
-  // 🧹 STEP 5: Clean local file
-  if (req.file?.path) {
-    fs.unlink(req.file.path, (err) => {
-      if (err) console.log("Delete error:", err.message);
-    });
-  }
-
   // 🔥 FINAL RESPONSE
   res.status(200).json({
     message: "Detection completed",
     result,
-    image: imageUrl, // optional (useful for frontend)
+    image: imageUrl,
   });
 };
-
