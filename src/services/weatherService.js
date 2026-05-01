@@ -2,19 +2,17 @@ import axios from "axios";
 
 export const getWeatherForAlerts = async (lat, lon) => {
   try {
-    const response = await axios.get(
-      "https://api.open-meteo.com/v1/forecast",
-      {
-        params: {
-          latitude: lat,
-          longitude: lon,
-          hourly: "temperature_2m,precipitation",
-          daily: "temperature_2m_max,temperature_2m_min,precipitation_sum",
-          timezone: "auto",
-        },
-        timeout: 5000, // ✅ prevent hanging
-      }
-    );
+    const response = await axios.get("https://api.open-meteo.com/v1/forecast", {
+      withCredentials: false, // 🔥 ADD THIS LINE
+      params: {
+        latitude: lat,
+        longitude: lon,
+        hourly: "temperature_2m,precipitation",
+        daily: "temperature_2m_max,temperature_2m_min,precipitation_sum",
+        timezone: "auto",
+      },
+      timeout: 5000,
+    });
 
     const hourly = response.data?.hourly || {};
     const daily = response.data?.daily || {};
@@ -36,7 +34,6 @@ export const getWeatherForAlerts = async (lat, lon) => {
     };
 
     return { next3Hours, fullDay };
-
   } catch (err) {
     console.log("Weather API Failed → Using fallback");
 
