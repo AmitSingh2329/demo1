@@ -21,7 +21,7 @@ app.use(cookieParser());
 // 🔥 CORS (more flexible)
 app.use(
   cors({
-    origin: ["http://localhost:5173", "http://localhost:5174","https://demo2-three-topaz.vercel.app/"], // allow both
+    origin: ["http://localhost:5173", "http://localhost:5174","https://demo2-three-topaz.vercel.app"], // allow both
     credentials: true,
   })
 );
