@@ -1,18 +1,31 @@
 import User from "../models/User.js";
 import bcrypt from "bcryptjs";
-import otpGenerator from "otp-generator";
 import { generateToken } from "../config/jwt.js";
 
-//REGISTER
+const isProd = process.env.NODE_ENV === "production";
+
+// REGISTER
 export const registerUser = async (req, res) => {
   try {
-    const { name, email, password, location } = req.body;
+    let { name, email, password, location } = req.body;
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ message: "Password must be at least 6 characters" });
+    }
+
+    email = email.toLowerCase();
 
     const exists = await User.findOne({ email });
-    if (exists)
+    if (exists) {
       return res.status(400).json({ message: "User already exists" });
+    }
 
-    const hashed = await bcrypt.hash(password, 10);
+    const saltRounds = parseInt(process.env.BCRYPT_ROUNDS) || 10;
+    const hashed = await bcrypt.hash(password, saltRounds);
 
     const user = await User.create({
       name,
@@ -25,8 +38,8 @@ export const registerUser = async (req, res) => {
 
     res.cookie("token", token, {
       httpOnly: true,
-      secure: true,
-      sameSite: "None",
+      secure: isProd,
+      sameSite: isProd ? "None" : "Lax",
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
@@ -40,29 +53,34 @@ export const registerUser = async (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("❌ Register Error:", err.message);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-//LOGIN
+// LOGIN
 export const loginUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    let { email, password } = req.body;
 
-    const user = await User.findOne({ email });
-    if (!user)
-      return res.status(404).json({ message: "User not found" });
+    email = email.toLowerCase();
+
+    const user = await User.findOne({ email }).select("+password");;
+    if (!user) {
+      return res.status(400).json({ message: "Invalid email or password" });
+    }
 
     const match = await bcrypt.compare(password, user.password);
-    if (!match)
-      return res.status(400).json({ message: "Invalid credentials" });
+    if (!match) {
+      return res.status(400).json({ message: "Invalid email or password" });
+    }
 
     const token = generateToken(user._id);
 
     res.cookie("token", token, {
       httpOnly: true,
-      secure: true,
-      sameSite: "None",
+      secure: isProd,
+      sameSite: isProd ? "None" : "Lax",
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
@@ -76,31 +94,51 @@ export const loginUser = async (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("❌ Login Error:", err.message);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-//LOGOUT
+// LOGOUT
 export const logoutUser = async (req, res) => {
   try {
     res.cookie("token", "", {
       httpOnly: true,
-      secure: true,
-      sameSite: "None",
+      secure: isProd,
+      sameSite: isProd ? "None" : "Lax",
       expires: new Date(0)
     });
 
-    res.status(200).json({
-      message: "Logged out successfully"
-    });
+    res.status(200).json({ message: "Logged out successfully" });
 
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("❌ Logout Error:", err.message);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-//
+// PROFILE
 export const getProfile = async (req, res) => {
-  res.status(200).json(req.user);
-};
+  try {
+    // ✅ Check authentication
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ message: "Not authorized" });
+    }
 
+    // ✅ Fetch fresh user data from DB
+    const user = await User.findById(req.user._id).select("-password");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.status(200).json(user);
+
+  } catch (error) {
+    console.error("❌ Profile Error:", error.message);
+
+    res.status(500).json({
+      message: "Failed to fetch profile",
+    });
+  }
+};

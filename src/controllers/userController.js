@@ -40,3 +40,24 @@ export const deleteDiseaseHistory = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+// 🗑 Delete Yield History
+export const deleteYieldHistory = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const user = await User.findById(req.user._id);
+
+    user.yieldHistory = user.yieldHistory.filter(
+      (item) => item._id.toString() !== id
+    );
+
+    await user.save();
+
+    res.json({ message: "Yield deleted successfully" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Delete failed" });
+  }
+};

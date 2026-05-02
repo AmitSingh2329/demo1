@@ -1,9 +1,13 @@
 import axios from "axios";
 
+const api = axios.create({
+  baseURL: process.env.WEATHER_API_URL || "https://api.open-meteo.com/v1",
+  timeout: 5000,
+});
+
 export const getWeatherForAlerts = async (lat, lon) => {
   try {
-    const response = await axios.get("https://api.open-meteo.com/v1/forecast", {
-      withCredentials: false, // 🔥 ADD THIS LINE
+    const response = await api.get("/forecast", {
       params: {
         latitude: lat,
         longitude: lon,
@@ -11,20 +15,24 @@ export const getWeatherForAlerts = async (lat, lon) => {
         daily: "temperature_2m_max,temperature_2m_min,precipitation_sum",
         timezone: "auto",
       },
-      timeout: 5000,
     });
 
-    const hourly = response.data?.hourly || {};
-    const daily = response.data?.daily || {};
+    if (!response.data?.hourly || !response.data?.daily) {
+      throw new Error("Invalid weather API response");
+    }
+
+    const hourly = response.data.hourly;
+    const daily = response.data.daily;
 
     const temps = hourly.temperature_2m || [];
     const rains = hourly.precipitation || [];
 
+    const nextTemps = temps.slice(0, 3);
+    const nextRains = rains.slice(0, 3);
+
     const next3Hours = {
-      maxTemp: temps.length ? Math.max(...temps.slice(0, 3)) : 0,
-      totalRain: rains.length
-        ? rains.slice(0, 3).reduce((a, b) => a + b, 0)
-        : 0,
+      maxTemp: nextTemps.length ? Math.max(...nextTemps) : 0,
+      totalRain: nextRains.reduce((a, b) => a + b, 0),
     };
 
     const fullDay = {
@@ -33,21 +41,15 @@ export const getWeatherForAlerts = async (lat, lon) => {
       maxRain: daily.precipitation_sum?.[0] || 0,
     };
 
-    return { next3Hours, fullDay };
-  } catch (err) {
-    console.log("Weather API Failed → Using fallback");
+    return { next3Hours, fullDay, fallback: false };
 
-    // ✅ NEVER crash — return safe fallback
+  } catch (err) {
+    console.error("❌ Weather API Error:", err.message);
+
     return {
-      next3Hours: {
-        maxTemp: 0,
-        totalRain: 0,
-      },
-      fullDay: {
-        maxTemp: 0,
-        minTemp: 0,
-        maxRain: 0,
-      },
+      next3Hours: { maxTemp: 0, totalRain: 0 },
+      fullDay: { maxTemp: 0, minTemp: 0, maxRain: 0 },
+      fallback: true,
     };
   }
 };

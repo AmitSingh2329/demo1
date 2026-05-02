@@ -1,54 +1,67 @@
 import axios from "axios";
 import User from "../models/User.js";
 
-//  7-day forecast + real humidity
+// 🌦️ Weather Service
 const getWeatherForecast = async (lat, lon) => {
   try {
-    const response = await axios.get("https://api.open-meteo.com/v1/forecast", {
-      params: {
-        latitude: lat,
-        longitude: lon,
-        daily: "temperature_2m_max,temperature_2m_min,precipitation_sum",
-        hourly: "relativehumidity_2m",
-        timezone: "auto",
-      },
-    });
+    const response = await axios.get(
+      process.env.WEATHER_API_URL || "https://api.open-meteo.com/v1/forecast",
+      {
+        params: {
+          latitude: lat,
+          longitude: lon,
+          daily: "temperature_2m_max,temperature_2m_min,precipitation_sum",
+          hourly: "relativehumidity_2m",
+          timezone: "auto",
+        },
+        timeout: 5000,
+      }
+    );
 
-    const daily = response.data.daily;
-    const hourly = response.data.hourly;
+    const daily = response.data?.daily || {};
+    const hourly = response.data?.hourly || {};
+
+    const maxTemps = daily.temperature_2m_max || [];
+    const minTemps = daily.temperature_2m_min || [];
+    const rains = daily.precipitation_sum || [];
+    const humidityArr = hourly.relativehumidity_2m || [];
+
+    const days = Math.min(7, maxTemps.length, minTemps.length, rains.length);
+    const hours = Math.min(days * 24, humidityArr.length);
 
     let totalTemp = 0;
     let totalRain = 0;
     let totalHumidity = 0;
 
-    const days = 7;
-    const hours = days * 24;
-
-    //  Temperature + Rainfall
     for (let i = 0; i < days; i++) {
-      totalTemp +=
-        (daily.temperature_2m_max[i] + daily.temperature_2m_min[i]) / 2;
-
-      totalRain += daily.precipitation_sum[i];
+      totalTemp += (maxTemps[i] + minTemps[i]) / 2;
+      totalRain += rains[i];
     }
 
-    //  Humidity (hourly avg)
     for (let i = 0; i < hours; i++) {
-      totalHumidity += hourly.relativehumidity_2m[i];
+      totalHumidity += humidityArr[i];
     }
 
     return {
-      temperature: totalTemp / days,
+      temperature: days ? totalTemp / days : 30,
       rainfall: totalRain,
-      humidity: totalHumidity / hours,
+      humidity: hours ? totalHumidity / hours : 60,
+      fallback: false,
     };
+
   } catch (error) {
-    console.error("Weather Error:", error.message);
-    throw new Error("Failed to fetch weather data");
+    console.error("❌ Weather Error:", error.message);
+
+    return {
+      temperature: 30,
+      rainfall: 0,
+      humidity: 60,
+      fallback: true,
+    };
   }
 };
 
-//  Season detection
+// 🌾 Season Detection
 const getSeason = () => {
   const month = new Date().getMonth() + 1;
 
@@ -57,54 +70,67 @@ const getSeason = () => {
   return "Zayad";
 };
 
-//  MAIN CONTROLLER
+// 🌱 MAIN CONTROLLER
 export const predictCrop = async (req, res) => {
   try {
-    const { lat, lon, nitrogen, phosphorus, potassium, ph, soil } =
-      req.body || {};
+    let { lat, lon, nitrogen, phosphorus, potassium, ph, soil } = req.body || {};
 
-    // ✅ validation
-    if (lat === undefined || lon === undefined) {
-      return res.status(400).json({ error: "Location required" });
-    }
+    // ✅ Convert & validate
+    const latNum = parseFloat(lat);
+    const lonNum = parseFloat(lon);
+    const n = Number(nitrogen);
+    const p = Number(phosphorus);
+    const k = Number(potassium);
+    const phVal = Number(ph);
 
     if (
-      nitrogen === undefined ||
-      phosphorus === undefined ||
-      potassium === undefined ||
-      ph === undefined ||
+      isNaN(latNum) || isNaN(lonNum) ||
+      isNaN(n) || isNaN(p) || isNaN(k) || isNaN(phVal) ||
       !soil
     ) {
-      return res.status(400).json({ error: "Missing fields" });
+      return res.status(400).json({ error: "Invalid or missing input values" });
     }
 
-    // ✅ weather (safe)
-    let weather;
-    try {
-      weather = await getWeatherForecast(lat, lon);
-    } catch {
-      weather = { temperature: 30, rainfall: 0, humidity: 60 };
-    }
+    // 🌦️ Weather
+    const weather = await getWeatherForecast(latNum, lonNum);
 
     const season = getSeason();
 
     const finalData = {
-      nitrogen,
-      phosphorus,
-      potassium,
-      ph,
+      nitrogen: n,
+      phosphorus: p,
+      potassium: k,
+      ph: phVal,
       soil,
       season,
-      ...weather,
+      temperature: weather.temperature,
+      rainfall: weather.rainfall,
+      humidity: weather.humidity,
     };
 
-    // ✅ ML safe
+    // 🤖 ML Prediction
     let prediction;
+
     try {
-      const mlResponse = await axios.post(process.env.ML_API_URL, finalData);
+      if (!process.env.ML_CROP_API) {
+        throw new Error("ML API not configured");
+      }
+
+      const mlResponse = await axios.post(
+        `${process.env.ML_CROP_API}/predict`,
+        finalData,
+        { timeout: 5000 }
+      );
+
       prediction = mlResponse.data;
-    } catch {
+
+    } catch (err) {
+      console.error("❌ ML Error:", err.message);
+
+      // ✅ DEMO FALLBACK (controlled)
       prediction = {
+        fallback: true,
+        message: "Demo mode: showing sample recommendation",
         best_crop: "Rice",
         probability: 0.8,
         top_3_recommendations: [
@@ -115,26 +141,41 @@ export const predictCrop = async (req, res) => {
       };
     }
 
-    // ✅ save
+    // 💾 Save History (safe)
     if (req.user?._id) {
-      await User.findByIdAndUpdate(req.user._id, {
-        $push: {
-          cropHistory: {
-            input: finalData,
-            result: prediction,
-            createdAt: new Date(),
+      await User.findByIdAndUpdate(
+        req.user._id,
+        {
+          $push: {
+            cropHistory: {
+              input: finalData,
+              result: prediction,
+              createdAt: new Date(),
+            },
           },
         },
-      });
+        { returnDocument: "before" }
+      );
     }
 
+    // 📤 Response
     res.json({
       soilType: soil,
-      weather,
+      season,
+      weather: {
+        temperature: weather.temperature,
+        rainfall: weather.rainfall,
+        humidity: weather.humidity,
+        fallback: weather.fallback,
+      },
       recommendedCrops: prediction,
     });
+
   } catch (error) {
-    console.error("Prediction Error:", error.message);
-    res.status(500).json({ error: error.message });
+    console.error("❌ Prediction Error:", error.message);
+
+    res.status(500).json({
+      error: "Prediction failed",
+    });
   }
 };

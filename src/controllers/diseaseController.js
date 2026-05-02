@@ -2,51 +2,50 @@ import axios from "axios";
 import FormData from "form-data";
 import User from "../models/User.js";
 import cloudinary from "../config/cloudinary.js";
-import streamifier from "streamifier";
 
 export const detectDisease = async (req, res) => {
   let result = { disease: "Unknown Disease" };
   let imageUrl = "";
 
-  // ❌ No file
-  if (!req.file) {
-    return res.status(400).json({ error: "Image is required" });
-  }
-
-  console.log("📦 File received:", req.file.originalname);
-
-  // 🔥 Upload buffer to Cloudinary
-  const uploadFromBuffer = (buffer) => {
-    return new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(
-        { folder: "disease_detection" },
-        (error, result) => {
-          if (result) resolve(result);
-          else reject(error);
-        }
-      );
-      streamifier.createReadStream(buffer).pipe(stream);
-    });
-  };
-
-  // 🔥 STEP 1: Upload to Cloudinary
   try {
-    console.log("☁️ Uploading to Cloudinary...");
+    // ✅ Validate file
+    const allowedTypes = ["image/jpeg", "image/png", "image/jpg"];
 
-    const uploaded = await uploadFromBuffer(req.file.buffer);
+    if (!req.file || !allowedTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({
+        error: "Valid image (jpg/png) is required",
+      });
+    }
+
+    console.log("📦 File received:", req.file.originalname);
+
+    // ☁️ Upload to Cloudinary
+    const base64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
+
+    const uploaded = await cloudinary.uploader.upload(base64, {
+      folder: "disease_detection",
+      resource_type: "image",
+      transformation: [
+        { width: 512, height: 512, crop: "limit" },
+        { quality: "auto" },
+      ],
+    });
+
+    if (!uploaded?.secure_url) {
+      throw new Error("Cloudinary upload failed");
+    }
+
     imageUrl = uploaded.secure_url;
 
     console.log("✅ Cloudinary URL:", imageUrl);
 
-  } catch (uploadError) {
-    console.error("❌ Cloudinary Error:", uploadError.message);
-  }
+    // 🤖 ML API
+    try {
+      if (!process.env.ML_DISEASE_API) {
+        throw new Error("ML API not configured");
+      }
 
-  // 🔥 STEP 2: ML API (optional)
-  try {
-    if (process.env.ML_DISEASE_API) {
       const formData = new FormData();
-
       formData.append("file", req.file.buffer, {
         filename: req.file.originalname,
         contentType: req.file.mimetype,
@@ -63,44 +62,52 @@ export const detectDisease = async (req, res) => {
 
       result = {
         disease: mlResponse.data?.disease || "Unknown Disease",
+        fallback: false,
       };
 
       console.log("✅ ML RESULT:", result);
-    } else {
-      console.log("⚠️ ML API not configured");
+
+    } catch (mlError) {
+      console.error("❌ ML Error:", mlError.message);
+
+      result = {
+        disease: "Unknown Disease",
+        fallback: true,
+        message: "ML service unavailable",
+      };
     }
 
-  } catch (mlError) {
-    console.error("❌ ML ERROR:", mlError.code || mlError.message);
-
-    result = {
-      disease: "Unknown Disease (ML unavailable)",
-    };
-  }
-
-  // 🔥 STEP 3: Save to DB
-  try {
+    // 💾 Save to DB
     if (req.user?._id) {
-      await User.findByIdAndUpdate(req.user._id, {
-        $push: {
-          diseaseHistory: {
-            image: imageUrl,
-            result,
-            createdAt: new Date(),
+      await User.findByIdAndUpdate(
+        req.user._id,
+        {
+          $push: {
+            diseaseHistory: {
+              image: imageUrl,
+              result,
+              createdAt: new Date(),
+            },
           },
         },
-      });
+        { returnDocument: "before" }
+      );
 
       console.log("✅ Saved to DB");
     }
-  } catch (dbError) {
-    console.error("❌ DB Error:", dbError.message);
-  }
 
-  // 🔥 FINAL RESPONSE
-  res.status(200).json({
-    message: "Detection completed",
-    result,
-    image: imageUrl,
-  });
+    // 📤 Response
+    res.status(200).json({
+      message: "Detection completed",
+      result,
+      image: imageUrl,
+    });
+
+  } catch (error) {
+    console.error("❌ Detection Error:", error.message);
+
+    res.status(500).json({
+      error: "Disease detection failed",
+    });
+  }
 };
