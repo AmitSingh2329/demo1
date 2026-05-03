@@ -52,7 +52,7 @@ export const detectDisease = async (req, res) => {
       });
 
       const mlResponse = await axios.post(
-        process.env.ML_DISEASE_API,
+        `${process.env.ML_DISEASE_API}/predict`,
         formData,
         {
           headers: formData.getHeaders(),
