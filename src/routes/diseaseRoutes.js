@@ -8,7 +8,7 @@ const router = express.Router();
 router.post(
   "/detect",
   protect,
-  upload.single("image"),
+  upload.single("file"),
   detectDisease
 );
 
